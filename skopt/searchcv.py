@@ -81,9 +81,6 @@ class BayesSearchCV(BaseSearchCV):
         ``scorer(estimator, X, y)``.
         If ``None``, the ``score`` method of the estimator is used.
 
-    fit_params : dict, optional
-        Parameters to pass to the fit method.
-
     n_jobs : int, default=1
         Number of jobs to run in parallel. At maximum there are
         ``n_points`` times ``cv`` jobs available during each iteration.
@@ -278,7 +275,7 @@ class BayesSearchCV(BaseSearchCV):
     """
 
     def __init__(self, estimator, search_spaces, optimizer_kwargs=None,
-                 n_iter=50, scoring=None, fit_params=None, n_jobs=1,
+                 n_iter=50, scoring=None, n_jobs=1,
                  n_points=1, iid=True, refit=True, cv=None, verbose=0,
                  pre_dispatch='2*n_jobs', random_state=None,
                  error_score='raise', return_train_score=False):
@@ -291,7 +288,7 @@ class BayesSearchCV(BaseSearchCV):
         self._check_search_space(self.search_spaces)
 
         super(BayesSearchCV, self).__init__(
-             estimator=estimator, scoring=scoring, fit_params=fit_params,
+             estimator=estimator, scoring=scoring,
              n_jobs=n_jobs, iid=iid, refit=refit, cv=cv, verbose=verbose,
              pre_dispatch=pre_dispatch, error_score=error_score,
              return_train_score=return_train_score)
@@ -362,7 +359,7 @@ class BayesSearchCV(BaseSearchCV):
         return self.cv_results_['params'][self.best_index_]
 
     # copied for compatibility with 0.19 sklearn from 0.18 BaseSearchCV
-    def _fit(self, X, y, groups, parameter_iterable):
+    def _fit(self, X, y, groups, parameter_iterable, **fit_params):
         """
         Actual fitting,  performing the search over parameters.
         Taken from https://github.com/scikit-learn/scikit-learn/blob/0.18.X
@@ -394,11 +391,11 @@ class BayesSearchCV(BaseSearchCV):
                 clone(base_estimator),
                 X, y, self.scorer_,
                 train, test, self.verbose, parameters,
-                fit_params=self.fit_params,
                 return_train_score=self.return_train_score,
                 return_n_test_samples=True,
                 return_times=True, return_parameters=True,
-                error_score=self.error_score
+                error_score=self.error_score,
+                fit_params=fit_params
             )
             for parameters in parameter_iterable
             for train, test in cv_iter)
@@ -416,7 +413,8 @@ class BayesSearchCV(BaseSearchCV):
 
         results = dict()
 
-        def _store(key_name, array, weights=None, splits=False, rank=False):
+        def _store(key_name, array, weights=None, splits=False, rank=False,
+                   **fit_params):
             """A small helper to store the scores/times to the cv_results_"""
             array = np.array(array, dtype=np.float64).reshape(n_candidates,
                                                               n_splits)
@@ -443,7 +441,8 @@ class BayesSearchCV(BaseSearchCV):
                                       dtype=np.int)
 
         _store('test_score', test_scores, splits=True, rank=True,
-               weights=test_sample_counts if self.iid else None)
+               weights=test_sample_counts if self.iid else None,
+               **fit_params)
         if self.return_train_score:
             _store('train_score', train_scores, splits=True)
         _store('fit_time', fit_time)
@@ -482,13 +481,13 @@ class BayesSearchCV(BaseSearchCV):
             best_estimator = clone(base_estimator).set_params(
                 **best_parameters)
             if y is not None:
-                best_estimator.fit(X, y, **self.fit_params)
+                best_estimator.fit(X, y, **fit_params)
             else:
-                best_estimator.fit(X, **self.fit_params)
+                best_estimator.fit(X, **fit_params)
             self.best_estimator_ = best_estimator
         return self
 
-    def _fit_best_model(self, X, y):
+    def _fit_best_model(self, X, y, **fit_params):
         """Fit the estimator copy with best parameters found to the
         provided data.
 
@@ -507,7 +506,7 @@ class BayesSearchCV(BaseSearchCV):
         """
         self.best_estimator_ = clone(self.estimator)
         self.best_estimator_.set_params(**self.best_params_)
-        self.best_estimator_.fit(X, y, **(self.fit_params or {}))
+        self.best_estimator_.fit(X, y, **fit_params)
         return self
 
     def _make_optimizer(self, params_space):
@@ -533,7 +532,8 @@ class BayesSearchCV(BaseSearchCV):
 
         return optimizer
 
-    def _step(self, X, y, search_space, optimizer, groups=None, n_points=1):
+    def _step(self, X, y, search_space, optimizer, groups=None, n_points=1,
+              **fit_params):
         """Generate n_jobs parameters and evaluate them in parallel.
         """
 
@@ -552,7 +552,7 @@ class BayesSearchCV(BaseSearchCV):
         # HACK: this adds compatibility with different versions of sklearn
         refit = self.refit
         self.refit = False
-        self._fit(X, y, groups, params_dict)
+        self._fit(X, y, groups, params_dict, **fit_params)
         self.refit = refit
 
         # merge existing and new cv_results_
@@ -594,7 +594,7 @@ class BayesSearchCV(BaseSearchCV):
     def _run_search(self, x):
         pass
 
-    def fit(self, X, y=None, groups=None, callback=None):
+    def fit(self, X, y=None, groups=None, callback=None, **fit_params):
         """Run fit on the estimator with randomly drawn parameters.
 
         Parameters
@@ -614,6 +614,9 @@ class BayesSearchCV(BaseSearchCV):
             If callable then `callback(res)` is called after each parameter
             combination tested. If list of callables, then each callable in
             the list is called.
+
+        **fit_params : dict of string -> object
+            Parameters passed to the ``fit`` method of the estimator
         """
 
         # check if space is a single dict, convert to list if so
@@ -659,7 +662,7 @@ class BayesSearchCV(BaseSearchCV):
 
                 optim_result = self._step(
                     X, y, search_space, optimizer,
-                    groups=groups, n_points=n_points_adjusted
+                    groups=groups, n_points=n_points_adjusted, **fit_params
                 )
                 n_iter -= n_points
 
@@ -668,6 +671,6 @@ class BayesSearchCV(BaseSearchCV):
 
         # Refit the best model on the the whole dataset
         if self.refit:
-            self._fit_best_model(X, y)
+            self._fit_best_model(X, y, **fit_params)
 
         return self
